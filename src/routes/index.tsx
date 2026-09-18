@@ -78,7 +78,7 @@ function MedRemind() {
   );
 }
 
-function TodayView({ medicines, next, adherence, updateStatus, onAdd }: { medicines: Medicine[]; next?: Medicine; adherence: number; updateStatus: (id: number, status: Status) => void; onAdd: () => void }) {
+function TodayView({ medicines, next, adherence, updateStatus, onAdd }: { medicines: Medicine[]; next: Medicine | undefined; adherence: number; updateStatus: (id: number, status: Status) => void; onAdd: () => void }) {
   return <>
     <section className="relative overflow-hidden rounded-lg bg-hero px-6 py-7 text-sidebar-foreground sm:px-9 sm:py-9">
       <div className="absolute -right-16 -top-20 h-52 w-52 rounded-full bg-sidebar-accent" />
