@@ -14,7 +14,113 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      dose_history: {
+        Row: {
+          id: number
+          medicine_id: number
+          recorded_at: string
+          scheduled_for: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          id?: number
+          medicine_id: number
+          recorded_at?: string
+          scheduled_for?: string
+          status: string
+          user_id: string
+        }
+        Update: {
+          id?: number
+          medicine_id?: number
+          recorded_at?: string
+          scheduled_for?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dose_history_medicine_id_fkey"
+            columns: ["medicine_id"]
+            isOneToOne: false
+            referencedRelation: "medicines"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      medicines: {
+        Row: {
+          created_at: string
+          dose: string
+          dose_time: string
+          id: number
+          name: string
+          period: string
+          status: string
+          stock: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          dose: string
+          dose_time: string
+          id?: number
+          name: string
+          period: string
+          status?: string
+          stock?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          dose?: string
+          dose_time?: string
+          id?: number
+          name?: string
+          period?: string
+          status?: string
+          stock?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          caregiver_email: string | null
+          caregiver_name: string | null
+          created_at: string
+          display_name: string
+          preferences: Json
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          caregiver_email?: string | null
+          caregiver_name?: string | null
+          created_at?: string
+          display_name?: string
+          preferences?: Json
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          avatar_url?: string | null
+          caregiver_email?: string | null
+          caregiver_name?: string | null
+          created_at?: string
+          display_name?: string
+          preferences?: Json
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
