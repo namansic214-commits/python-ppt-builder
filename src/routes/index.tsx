@@ -1,7 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Bell, CalendarDays, Check, CirclePlus, Clock3, HeartPulse, Home, Package, Pill, SkipForward, UserRound, Users, X } from "lucide-react";
+import { Bell, CalendarDays, Check, CirclePlus, Clock3, HeartPulse, Home, LogIn, LogOut, Package, Pill, SkipForward, UserRound, Users, X } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
+import { z } from "zod";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/integrations/supabase/client";
 
 type Status = "pending" | "taken" | "skipped" | "snoozed";
 type Medicine = { id: number; name: string; dose: string; time: string; period: string; stock: number; status: Status };
@@ -35,7 +38,10 @@ function MedRemind() {
   const [active, setActive] = useState("today");
   const [medicines, setMedicines] = useState<Medicine[]>(starter);
   const [showAdd, setShowAdd] = useState(false);
+  const [showAuth, setShowAuth] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [cloudReady, setCloudReady] = useState(false);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("medremind-medicines");
@@ -45,6 +51,39 @@ function MedRemind() {
     setLoaded(true);
   }, []);
   useEffect(() => { if (loaded) window.localStorage.setItem("medremind-medicines", JSON.stringify(medicines)); }, [medicines, loaded]);
+  useEffect(() => {
+    let active = true;
+    supabase.auth.getUser().then(({ data }) => { if (active) setUser(data.user); });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (!session) setCloudReady(false);
+    });
+    return () => { active = false; listener.subscription.unsubscribe(); };
+  }, []);
+  useEffect(() => {
+    if (!user || !loaded) return;
+    let active = true;
+    void (async () => {
+      const { data } = await supabase.from("medicines").select("id,name,dose,dose_time,period,stock,status").order("dose_time");
+      if (!active) return;
+      if (data?.length) {
+        setMedicines(data.map((item) => ({ id: Number(item.id), name: item.name, dose: item.dose, time: item.dose_time.slice(0, 5), period: item.period, stock: item.stock, status: item.status as Status })));
+      } else if (medicines.length) {
+        await supabase.from("medicines").upsert(medicines.map((item) => ({ id: item.id, user_id: user.id, name: item.name, dose: item.dose, dose_time: item.time, period: item.period, stock: item.stock, status: item.status })));
+      }
+      const displayName = String(user.user_metadata?.["display_name"] ?? "").slice(0, 100);
+      await supabase.from("profiles").upsert({ user_id: user.id, display_name: displayName, caregiver_name: user.user_metadata?.["caregiver_name"] || null, caregiver_email: user.user_metadata?.["caregiver_email"] || null });
+      if (active) setCloudReady(true);
+    })();
+    return () => { active = false; };
+  }, [user, loaded]);
+  useEffect(() => {
+    if (!user || !cloudReady) return;
+    const timer = window.setTimeout(() => {
+      void supabase.from("medicines").upsert(medicines.map((item) => ({ id: item.id, user_id: user.id, name: item.name, dose: item.dose, dose_time: item.time, period: item.period, stock: item.stock, status: item.status })));
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [medicines, user, cloudReady]);
 
   const taken = medicines.filter((medicine) => medicine.status === "taken").length;
   const adherence = medicines.length ? Math.round((taken / medicines.length) * 100) : 0;
@@ -65,7 +104,7 @@ function MedRemind() {
       </aside>
 
       <main className="min-w-0 flex-1 lg:ml-64">
-        <header className="border-b border-border bg-card px-5 py-4 sm:px-8 lg:px-10"><div className="mx-auto flex max-w-6xl items-center justify-between"><div><p className="text-sm font-bold text-accent">SATURDAY · 19 SEPTEMBER</p><h1 className="mt-1 text-2xl font-black sm:text-3xl">Good morning, Naman</h1></div><button aria-label="Notifications" className="relative rounded-full bg-secondary p-3 text-secondary-foreground"><Bell size={22}/><span className="absolute right-1 top-1 h-3 w-3 rounded-full bg-destructive" /></button></div></header>
+        <header className="border-b border-border bg-card px-5 py-4 sm:px-8 lg:px-10"><div className="mx-auto flex max-w-6xl items-center justify-between gap-3"><div><p className="text-sm font-bold text-accent">SATURDAY · 19 SEPTEMBER</p><h1 className="mt-1 text-2xl font-black sm:text-3xl">Good morning, {user?.user_metadata?.["display_name"] || "Naman"}</h1></div><div className="flex items-center gap-2"><button aria-label="Notifications" className="relative rounded-full bg-secondary p-3 text-secondary-foreground"><Bell size={22}/><span className="absolute right-1 top-1 h-3 w-3 rounded-full bg-destructive" /></button>{user ? <Button variant="outline" onClick={async () => { await supabase.auth.signOut(); }}><LogOut/>Sign out</Button> : <Button onClick={() => setShowAuth(true)}><LogIn/>Sign in</Button>}</div></div></header>
         <div className="mx-auto max-w-6xl px-5 py-7 sm:px-8 lg:px-10 lg:py-9">
           {active === "today" && <TodayView medicines={medicines} next={next} adherence={adherence} updateStatus={updateStatus} onAdd={() => setShowAdd(true)} />}
           {active === "medicines" && <MedicinesView medicines={medicines} onAdd={() => setShowAdd(true)} />}
@@ -74,6 +113,7 @@ function MedRemind() {
         </div>
       </main>
       {showAdd && <AddMedicine onClose={() => setShowAdd(false)} onAdd={(medicine) => { setMedicines((items) => [...items, medicine]); setShowAdd(false); }} />}
+      {showAuth && <AuthDialog onClose={() => setShowAuth(false)} onSuccess={() => setShowAuth(false)} />}
     </div>
   );
 }
@@ -94,7 +134,7 @@ function DoseRow({ medicine, updateStatus }: { medicine: Medicine; updateStatus:
   const done = medicine.status === "taken";
   return <article className={`grid gap-4 rounded-lg border bg-card p-4 shadow-sm sm:grid-cols-[80px_1fr_auto] sm:items-center ${done ? "border-success/40" : "border-border"}`}>
     <div className="text-center"><p className="text-xl font-black">{medicine.time}</p><p className="text-xs font-bold text-muted-foreground">{medicine.period}</p></div>
-    <div className="flex items-center gap-4"><span className={`grid h-12 w-12 shrink-0 place-items-center rounded-full ${done ? "bg-success/15 text-success" : "bg-secondary text-accent"}`}><Pill /></span><div><h3 className="text-lg font-black">{medicine.name}</h3><p className="text-sm text-muted-foreground">{medicine.dose} · {medicine.stock} left</p></div></div>
+    <div className="flex items-center gap-4"><span className={`grid h-12 w-12 shrink-0 place-items-center rounded-full ${done ? "bg-success/15 text-success" : "bg-secondary text-accent"}`}><Pill /></span><div><h3 className={`text-lg font-black ${done ? "text-muted-foreground line-through decoration-2" : ""}`}>{medicine.name}</h3><p className={`text-sm text-muted-foreground ${done ? "line-through" : ""}`}>{medicine.dose} · {medicine.stock} left</p></div></div>
     {done ? <span className="flex items-center gap-2 font-black text-success"><Check /> Taken</span> : <div className="flex flex-wrap gap-2"><Button onClick={() => updateStatus(medicine.id, "taken")}><Check/>Taken</Button><Button variant="secondary" onClick={() => updateStatus(medicine.id, "snoozed")}><Clock3/>Snooze</Button><Button variant="ghost" onClick={() => updateStatus(medicine.id, "skipped")}><SkipForward/>Skip</Button></div>}
   </article>;
 }
@@ -120,7 +160,38 @@ function FamilyView({ medicines, adherence }: { medicines: Medicine[]; adherence
 
 function AddMedicine({ onClose, onAdd }: { onClose: () => void; onAdd: (medicine: Medicine) => void }) {
   const [name, setName] = useState(""); const [dose, setDose] = useState(""); const [time, setTime] = useState("08:00"); const [period, setPeriod] = useState("Morning"); const [stock, setStock] = useState(30);
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-foreground/55 p-4" role="dialog" aria-modal="true" aria-labelledby="add-title"><form onSubmit={(e) => { e.preventDefault(); if (!name.trim() || !dose.trim()) return; onAdd({ id: Date.now(), name: name.trim(), dose: dose.trim(), time, period, stock, status: "pending" }); }} className="w-full max-w-lg rounded-lg bg-card p-6 shadow-2xl sm:p-8"><div className="flex items-center justify-between"><div><p className="text-sm font-black uppercase text-accent">New schedule</p><h2 id="add-title" className="text-2xl font-black">Add medicine</h2></div><button type="button" onClick={onClose} aria-label="Close" className="rounded-full bg-muted p-2"><X/></button></div><div className="mt-6 space-y-4"><Field label="Medicine name"><input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Metformin" className="w-full rounded-md border border-input bg-background px-4 py-3 text-lg outline-none focus:ring-4 focus:ring-ring/20"/></Field><Field label="Dosage"><input value={dose} onChange={(e) => setDose(e.target.value)} required placeholder="e.g. 500 mg · 1 tablet" className="w-full rounded-md border border-input bg-background px-4 py-3 text-lg outline-none focus:ring-4 focus:ring-ring/20"/></Field><div className="grid grid-cols-2 gap-4"><Field label="Time"><input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="w-full rounded-md border border-input bg-background px-4 py-3"/></Field><Field label="Time of day"><select value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full rounded-md border border-input bg-background px-4 py-3"><option>Morning</option><option>Afternoon</option><option>Night</option></select></Field></div><Field label="Tablets in stock"><input type="number" min="0" value={stock} onChange={(e) => setStock(Number(e.target.value))} className="w-full rounded-md border border-input bg-background px-4 py-3"/></Field></div><div className="mt-7 flex justify-end gap-3"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" size="lg"><CirclePlus/>Save medicine</Button></div></form></div>;
+  const medicineSchema = z.object({ name: z.string().trim().min(1).max(100), dose: z.string().trim().min(1).max(100), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), period: z.enum(["Morning", "Afternoon", "Night"]), stock: z.number().int().min(0).max(10000) });
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-foreground/55 p-4" role="dialog" aria-modal="true" aria-labelledby="add-title"><form onSubmit={(e) => { e.preventDefault(); const parsed = medicineSchema.safeParse({ name, dose, time, period, stock }); if (!parsed.success) return; onAdd({ id: Date.now(), ...parsed.data, status: "pending" }); }} className="w-full max-w-lg rounded-lg bg-card p-6 shadow-2xl sm:p-8"><div className="flex items-center justify-between"><div><p className="text-sm font-black uppercase text-accent">New schedule</p><h2 id="add-title" className="text-2xl font-black">Add medicine</h2></div><button type="button" onClick={onClose} aria-label="Close" className="rounded-full bg-muted p-2"><X/></button></div><div className="mt-6 space-y-4"><Field label="Medicine name"><input value={name} onChange={(e) => setName(e.target.value)} required maxLength={100} placeholder="e.g. Metformin" className="w-full rounded-md border border-input bg-background px-4 py-3 text-lg outline-none focus:ring-4 focus:ring-ring/20"/></Field><Field label="Dosage"><input value={dose} onChange={(e) => setDose(e.target.value)} required maxLength={100} placeholder="e.g. 500 mg · 1 tablet" className="w-full rounded-md border border-input bg-background px-4 py-3 text-lg outline-none focus:ring-4 focus:ring-ring/20"/></Field><div className="grid grid-cols-2 gap-4"><Field label="Time"><input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="w-full rounded-md border border-input bg-background px-4 py-3"/></Field><Field label="Time of day"><select value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full rounded-md border border-input bg-background px-4 py-3"><option>Morning</option><option>Afternoon</option><option>Night</option></select></Field></div><Field label="Tablets in stock"><input type="number" min="0" max="10000" value={stock} onChange={(e) => setStock(Number(e.target.value))} className="w-full rounded-md border border-input bg-background px-4 py-3"/></Field></div><div className="mt-7 flex justify-end gap-3"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" size="lg"><CirclePlus/>Save medicine</Button></div></form></div>;
+}
+
+const authSchema = z.object({ email: z.string().trim().email().max(255), password: z.string().min(8).max(128), displayName: z.string().trim().max(100), caregiverName: z.string().trim().max(100), caregiverEmail: z.union([z.literal(""), z.string().trim().email().max(255)]) });
+
+function AuthDialog({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+  const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
+  const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [displayName, setDisplayName] = useState(""); const [caregiverName, setCaregiverName] = useState(""); const [caregiverEmail, setCaregiverEmail] = useState("");
+  const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false);
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setMessage(""); setBusy(true);
+    if (mode === "forgot") {
+      const parsedEmail = z.string().trim().email().max(255).safeParse(email);
+      if (!parsedEmail.success) { setMessage("Enter a valid email address."); setBusy(false); return; }
+      const { error } = await supabase.auth.resetPasswordForEmail(parsedEmail.data, { redirectTo: `${window.location.origin}/reset-password` });
+      setMessage(error ? error.message : "Check your email for a password reset link."); setBusy(false); return;
+    }
+    const parsed = authSchema.safeParse({ email, password, displayName, caregiverName, caregiverEmail });
+    if (!parsed.success) { setMessage("Use a valid email and a password of at least 8 characters."); setBusy(false); return; }
+    if (mode === "signin") {
+      const { error } = await supabase.auth.signInWithPassword({ email: parsed.data.email, password: parsed.data.password });
+      if (error) setMessage(error.message); else onSuccess();
+    } else {
+      if (!parsed.data.displayName) { setMessage("Please enter your name."); setBusy(false); return; }
+      const { data, error } = await supabase.auth.signUp({ email: parsed.data.email, password: parsed.data.password, options: { emailRedirectTo: window.location.origin, data: { display_name: parsed.data.displayName, caregiver_name: parsed.data.caregiverName || null, caregiver_email: parsed.data.caregiverEmail || null } } });
+      setMessage(error ? error.message : data.session ? "Account created." : "Check your email to confirm your account, then sign in.");
+      if (data.session) onSuccess();
+    }
+    setBusy(false);
+  };
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-foreground/55 p-4" role="dialog" aria-modal="true" aria-labelledby="auth-title"><form onSubmit={submit} className="w-full max-w-md rounded-lg bg-card p-6 shadow-2xl sm:p-8"><div className="flex items-center justify-between"><div><p className="text-sm font-black uppercase text-accent">Secure cloud account</p><h2 id="auth-title" className="text-2xl font-black">{mode === "signin" ? "Welcome back" : mode === "signup" ? "Create your account" : "Reset password"}</h2></div><button type="button" onClick={onClose} aria-label="Close" className="rounded-full bg-muted p-2"><X/></button></div><p className="mt-2 text-sm text-muted-foreground">Your medicines and progress will be available on every device.</p><div className="mt-6 space-y-4">{mode === "signup" && <><Field label="Your name"><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={100} required className="w-full rounded-md border border-input bg-background px-4 py-3"/></Field><div className="grid grid-cols-2 gap-3"><Field label="Caregiver name"><input value={caregiverName} onChange={(e) => setCaregiverName(e.target.value)} maxLength={100} className="w-full rounded-md border border-input bg-background px-4 py-3"/></Field><Field label="Caregiver email"><input type="email" value={caregiverEmail} onChange={(e) => setCaregiverEmail(e.target.value)} maxLength={255} className="w-full rounded-md border border-input bg-background px-4 py-3"/></Field></div></>}<Field label="Email"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} maxLength={255} required className="w-full rounded-md border border-input bg-background px-4 py-3"/></Field>{mode !== "forgot" && <Field label="Password"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} maxLength={128} required className="w-full rounded-md border border-input bg-background px-4 py-3"/></Field>}</div>{message && <p className="mt-4 rounded-md bg-secondary p-3 text-sm font-bold">{message}</p>}<Button type="submit" size="lg" className="mt-6 w-full" disabled={busy}>{busy ? "Please wait…" : mode === "signin" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset link"}</Button><div className="mt-4 flex flex-wrap justify-center gap-3 text-sm"><button type="button" className="font-bold text-accent" onClick={() => { setMode(mode === "signup" ? "signin" : "signup"); setMessage(""); }}>{mode === "signup" ? "Already have an account?" : "Create an account"}</button>{mode !== "forgot" && <button type="button" className="font-bold text-muted-foreground" onClick={() => { setMode("forgot"); setMessage(""); }}>Forgot password?</button>}</div></form></div>;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="mb-2 block font-black">{label}</span>{children}</label>; }
